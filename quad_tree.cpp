@@ -9,28 +9,39 @@
 #include <vector>
 #include <iostream>
 #include <algorithm>
-
-quad_tree::quad_tree(std::vector<gravity_object>::iterator begin, std::vector<gravity_object>::iterator end, float* boxes) {
+#include <semaphore>
+#include <future>
+#include <chrono>
+quad_tree::quad_tree(std::vector<gravity_object>::iterator begin, std::vector<gravity_object>::iterator end, float* boxes, float* points) {
     GLboxes = boxes;
-    root = build_tree(bbox(begin,end),begin, end);
+    GLpoints = points;
+
+    root = build_tree(bbox(begin,end),begin, end, 0);
     for (auto i = 0; i < nodes.size(); i++)
         std::cout << i << " " << center_of_mass[i].x << " " << center_of_mass[i].y << " " << mass[i] << " " << width[i] << std::endl;
 }
 
 int quad_tree::build_tree(box const bound_box, std::vector<gravity_object>::iterator begin,
-                          std::vector<gravity_object>::iterator end) {
+                          std::vector<gravity_object>::iterator end,int recursion_level) {
     if (begin == end)
         return -1;
 
-    int result = nodes.size();
+    int result;
+    semaphore[0].acquire();
+    result = nodes.size();
     nodes.emplace_back();
     mass.emplace_back();
     center_of_mass.emplace_back();
     width.emplace_back();
+    semaphore[0].release();
+
+
+
     if (std::equal(begin, end, begin+1, [](gravity_object const & a, gravity_object const & b){return a.y == b.y && a.x == b.x;})){
         std::cout << "equal" << std::endl;
         exit(1);
     }
+
     if (begin +1 == end) {
         mass[result] = begin->mass;
         center_of_mass[result] = point{begin->x, begin->y};
@@ -39,22 +50,16 @@ int quad_tree::build_tree(box const bound_box, std::vector<gravity_object>::iter
 
     point center = middle(bound_box.bottom_left, bound_box.top_right);
 
-    *GLboxes = bound_box.bottom_left.x;
-    GLboxes++;
-    *GLboxes = center.y;
-    GLboxes++;
-    *GLboxes = bound_box.top_right.x;
-    GLboxes++;
-    *GLboxes = center.y;
-    GLboxes++;
-    *GLboxes = center.x;
-    GLboxes++;
-    *GLboxes = bound_box.bottom_left.y;
-    GLboxes++;
-    *GLboxes = center.x;
-    GLboxes++;
-    *GLboxes = bound_box.top_right.y;
-    GLboxes++;
+    semaphore[1].acquire();
+    GLboxes[result*4] = bound_box.bottom_left.x;
+    GLboxes[result*4+1] = center.y;
+    GLboxes[result*4+2] = bound_box.top_right.x;
+    GLboxes[result*4+3] = center.y;
+    GLboxes[result*4+4] = center.x;
+    GLboxes[result*4+5] = bound_box.bottom_left.y;
+    GLboxes[result*4+6] = center.x;
+    GLboxes[result*4+7] = bound_box.top_right.y;
+    semaphore[1].release();
 
     auto split_y =std::partition(
             begin,
@@ -77,34 +82,52 @@ int quad_tree::build_tree(box const bound_box, std::vector<gravity_object>::iter
      * [split_y, split_x_upper) are in the upper-left quadrant
      * [split_x_upper, end) are in the upper-right quadrant
      */
-    nodes[result].children[0][0] = build_tree(
-            box{bound_box.bottom_left, center},
-            begin,
-            split_x_lower
-    );
-    nodes[result].children[0][1] = build_tree(
-            box{point{center.x, bound_box.bottom_left.y}, point{bound_box.top_right.x, center.y}},
-            split_x_lower,
-            split_y
-    );
-    nodes[result].children[1][0] = build_tree(
-            box{point{bound_box.bottom_left.x, center.y}, point{center.x, bound_box.top_right.y}},
-            split_y,
-            split_x_upper
-    );
-    nodes[result].children[1][1] = build_tree(
-            box{center, bound_box.top_right},
-            split_x_upper,
-            end
-    );
-    for (int i = 0; i < 2; ++i) {
-        for (int j = 0; j <2 ; ++j) {
-            if (nodes[result].children[i][j] == -1)
+    if(recursion_level < 1){
+        std::future<int> threads[4];
+        threads[0] = std::async(&quad_tree::build_tree,this, box{bound_box.bottom_left, center}, begin, split_x_lower,recursion_level+1);
+        threads[1] = std::async(&quad_tree::build_tree,this, box{point{center.x, bound_box.bottom_left.y}, point{bound_box.top_right.x, center.y}}, split_x_lower, split_y,recursion_level+1);
+        threads[2] = std::async(&quad_tree::build_tree,this, box{point{bound_box.bottom_left.x, center.y}, point{center.x, bound_box.top_right.y}}, split_y, split_x_upper,recursion_level+1);
+        threads[3] = std::async(&quad_tree::build_tree,this, box{center, bound_box.top_right}, split_x_upper, end,recursion_level+1);
+        for (int i = 0; i < 4; i++){
+            nodes[result].children[i/2][i%2] = threads[i].get();
+            if (nodes[result].children[i/2][i%2] == -1)
                 continue;
-            mass[result] += mass[nodes[result].children[i][j]];
-            center_of_mass[result] += center_of_mass[nodes[result].children[i][j]] * mass[nodes[result].children[i][j]];
+            mass[result] += mass[nodes[result].children[i/2][i%2]];
+            center_of_mass[result] += center_of_mass[nodes[result].children[i/2][i%2]] * mass[nodes[result].children[i/2][i%2]];
+        }
+    }else {
+        nodes[result].children[0][0] = build_tree(
+                box{bound_box.bottom_left, center},
+                begin,
+                split_x_lower,
+                recursion_level+1
+        );
+        nodes[result].children[0][1] = build_tree(
+                box{point{center.x, bound_box.bottom_left.y}, point{bound_box.top_right.x, center.y}},
+                split_x_lower,
+                split_y,
+                recursion_level+1
+        );
+        nodes[result].children[1][0] = build_tree(
+                box{point{bound_box.bottom_left.x, center.y}, point{center.x, bound_box.top_right.y}},
+                split_y,
+                split_x_upper,
+                recursion_level+1
+        );
+        nodes[result].children[1][1] = build_tree(
+                box{center, bound_box.top_right},
+                split_x_upper,
+                end,
+                recursion_level+1
+        );
+        for (int i = 0; i < 4; ++i) {
+            if (nodes[result].children[i/2][i%2] == -1)
+                continue;
+            mass[result] += mass[nodes[result].children[i/2][i%2]];
+            center_of_mass[result] += center_of_mass[nodes[result].children[i/2][i%2]] * mass[nodes[result].children[i/2][i%2]];
         }
     }
+
     center_of_mass[result] /= mass[result];
 
     width[result] = std::max(
@@ -124,7 +147,7 @@ int quad_tree::build_tree(box const bound_box, std::vector<gravity_object>::iter
     return result;
 
 }
-void quad_tree::print_tree() {
+void quad_tree::print_tree(){
     for (int i = 0; i < nodes.size(); ++i) {
         std::cout << "Node " << i << " has children: " << nodes[i].children[0][0] << " " << nodes[i].children[0][1] << " " << nodes[i].children[1][0] << " " << nodes[i].children[1][1]
                   << "|" << mass[i] << "|" << center_of_mass[i] << std::endl;
@@ -132,10 +155,16 @@ void quad_tree::print_tree() {
 }
 
 void quad_tree::calculate_force(gravity_object *object) {
-    calculate_force(object, root);
+    object->Fx = 0;
+    object->Fy = 0;
+    calculate_force_recursive(object, root);
+    object->vx += object->Fx / object->mass * update_time;
+    object->vy += object->Fy / object->mass * update_time;
+    object->x += object->vx * update_time;
+    object->y += object->vy * update_time;
 }
-void quad_tree::calculate_force(gravity_object *object,int node) {
-    //what if node is the object itself?
+void quad_tree::calculate_force_recursive(gravity_object *object,int node) {
+
     if(object->x == center_of_mass[node].x && object->y == center_of_mass[node].y){
         return;
     }
@@ -151,10 +180,18 @@ void quad_tree::calculate_force(gravity_object *object,int node) {
             for (int j = 0; j <2 ; ++j) {
                 if (nodes[node].children[j][i] == -1)
                     continue;
-                calculate_force(object, nodes[node].children[j][i]);
+                calculate_force_recursive(object, nodes[node].children[j][i]);
             }
         }
     }
+}
+void quad_tree::calculate_force_iter(std::vector<gravity_object>::iterator begin, std::vector<gravity_object>::iterator end){
+    for (auto it = begin; it != end; ++it) {
+        calculate_force(&(*it));
+        GLpoints[it->index*2] = it->x;
+        GLpoints[it->index*2+1] = it->y;
+    }
+
 }
 
 void quad_tree::update_tree(std::vector<gravity_object>::iterator begin, std::vector<gravity_object>::iterator end) {
@@ -162,7 +199,8 @@ void quad_tree::update_tree(std::vector<gravity_object>::iterator begin, std::ve
     mass.clear();
     center_of_mass.clear();
     width.clear();
-    root = build_tree(bbox(begin,end),begin, end);
+    root = build_tree(bbox(begin,end),begin, end, 0);
+
 }
 
 void quad_tree::fill_centers(int node) {

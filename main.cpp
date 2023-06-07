@@ -1,10 +1,15 @@
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 #include "gravity_object.h"
-#include "engine.h"
 #include <iostream>
 #include "quad_tree.h"
 #include "geometry.h"
+#include <future>
+#include <thread>
+#include <vector>
+#include <semaphore.h>
+#include <chrono>
+bool drawQuadTree = false;
 
 static unsigned int CompileShader( unsigned int type ,const std::string& source){
     unsigned int id = glCreateShader(type);
@@ -42,9 +47,41 @@ static unsigned int CreateShader(const std::string& vertexShader, const std::str
 
     return program;
 }
-
+void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods)
+{
+    if (key == GLFW_KEY_SPACE && action == GLFW_PRESS)
+        drawQuadTree = !drawQuadTree;
+}
 int main(void)
 {
+    // Create initial conditions
+    std::vector<gravity_object> objects_vector = std::vector<gravity_object>();
+    const int number_of_objects = 10000;
+    const int number_of_boxes = number_of_objects; //Number of Leaf Nodes = 3 * Number of Internal Nodes + 1 in perfect world
+    float GLbuffer[(number_of_objects * 2) + (number_of_boxes * 8)];
+    float circle_radius = 0.25;
+    point V = point{0,0};
+    for (int i = 0; i < number_of_objects-1;i++){
+        circle_radius = (((double) rand() / (RAND_MAX))) * 0.1+0.05;
+        point vec = point{(((double) rand() / (RAND_MAX))-0.5) *2, (((double) rand() / (RAND_MAX))-0.5)*2};
+        vec = vec * (circle_radius / sqrt(vec.x*vec.x + vec.y*vec.y));
+        V.x = vec.y;
+        V.y = -vec.x;
+        V.x = V.x * 0.05;
+        V.y = V.y * 0.05;
+
+        objects_vector.push_back(gravity_object(100, vec.x, vec.y, V.x, V.y,i));
+        GLbuffer[i * 2] = objects_vector[i].x;
+        GLbuffer[i * 2 + 1] = objects_vector[i].y;
+
+    }
+    objects_vector.push_back(gravity_object(1000,0, 0, 0, 0, number_of_objects-1));
+    GLbuffer[(number_of_objects-1) * 2] = objects_vector[number_of_objects-1].x;
+    GLbuffer[(number_of_objects-1) * 2 + 1] = objects_vector[number_of_objects-1].y;
+    memset(GLbuffer + number_of_objects * 2, 0, number_of_boxes * 8 * sizeof(float));
+    quad_tree QT = quad_tree(objects_vector.begin(), objects_vector.end(),GLbuffer + number_of_objects * 2,GLbuffer);
+
+    // Initialize OpenGL
     GLFWwindow* window;
 
     /* Initialize the library */
@@ -70,34 +107,7 @@ int main(void)
     glfwMakeContextCurrent(window);
     if(glewInit() != GLEW_OK)
         std::cout << "Error!" << std::endl;
-    std::vector<gravity_object> objects_vector = std::vector<gravity_object>();
-    const int number_of_objects = 1000 + 1;
-    const int number_of_boxes = number_of_objects; //Number of Leaf Nodes = 3 * Number of Internal Nodes + 1 in perfect world
-    float GLbuffer[(number_of_objects * 2) + (number_of_boxes * 8)];
-    float circle_radius = 0.25;
-    point V = point{0,0};
-    for (int i = 0; i < number_of_objects-1;i++){
-        circle_radius = (((double) rand() / (RAND_MAX))) * 0.1+0.05;
-        point vec = point{(((double) rand() / (RAND_MAX))-0.5) *2, (((double) rand() / (RAND_MAX))-0.5)*2};
-        vec = vec * (circle_radius / sqrt(vec.x*vec.x + vec.y*vec.y));
-        V.x = vec.y;
-        V.y = -vec.x;
-        V.x = V.x * 0.05;
-        V.y = V.y * 0.05;
 
-        objects_vector.push_back(gravity_object(100, vec.x, vec.y, V.x, V.y));
-        GLbuffer[i * 2] = objects_vector[i].x;
-        GLbuffer[i * 2 + 1] = objects_vector[i].y;
-
-    }
-    objects_vector.push_back(gravity_object(1000,0, 0, 0, 0));
-    GLbuffer[(number_of_objects-1) * 2] = objects_vector[number_of_objects-1].x;
-    GLbuffer[(number_of_objects-1) * 2 + 1] = objects_vector[number_of_objects-1].y;
-    memset(GLbuffer + number_of_objects * 2, 0, number_of_boxes * 8 * sizeof(float));
-    std::cout << "Number of boxes: " << number_of_boxes  << std::endl;
-    quad_tree QT = quad_tree(objects_vector.begin(), objects_vector.end(),GLbuffer + number_of_objects * 2);
-
-    float update_time = 1;
     //TODO: learn how this shit works.
     unsigned int VBO, VAO;
     glGenBuffers(1, &VBO);
@@ -129,57 +139,69 @@ int main(void)
                             "}\n";
 
     unsigned int shaderPoint = CreateShader(vertexShader, fragmentShader);
+
     std::string fragmentShaderLine = "#version 330 core\n"
                                  "out vec4 FragColor;\n"
                                  "void main()\n"
                                  "{\n"
                                  "   FragColor = vec4(0.0f, 1.0f, 0.0f, 0.5f);\n"
                                  "}\n";
+
     unsigned int shaderLine = CreateShader(vertexShader, fragmentShaderLine);
-
     glEnable(GL_PROGRAM_POINT_SIZE);
-    /* Loop until the user closes the window */
+    //key callback
+    glfwSetKeyCallback(window, key_callback);
 
-    while (!glfwWindowShouldClose(window))
+    //Setup threads
+    const int number_of_threads = 8;
+    std::thread threads[number_of_threads];
+    const int number_of_objects_per_thread = number_of_objects / number_of_threads;
+    const int number_of_iter = 100;
+    int iter = 0;
+    float cum_time[2] = {0,0};
+    /* Loop until the user closes the window */
+    while (!glfwWindowShouldClose(window) && iter < number_of_iter)
     {
         /* Render her∆∆∆e */
         glClear(GL_COLOR_BUFFER_BIT);
         glUseProgram(shaderPoint);
         glDrawArrays(GL_POINTS, 0, number_of_objects);
         glUseProgram(shaderLine);
+        if (drawQuadTree)
         glDrawArrays(GL_LINES, number_of_objects, number_of_boxes*8);
         glBufferData(GL_ARRAY_BUFFER, number_of_objects*2*sizeof(float)+(number_of_boxes * 8)*sizeof(float) , GLbuffer, GL_DYNAMIC_DRAW);
 
 
-        auto start = std::chrono::high_resolution_clock::now();
-        for(auto &object:objects_vector){
-            object.Fx = 0;
-            object.Fy = 0;
-            QT.calculate_force(&object);
-            object.vx += object.Fx / object.mass * update_time;
-            object.vy += object.Fy / object.mass * update_time;
-            object.x += object.vx * update_time;
-            object.y += object.vy * update_time;
+        auto start1 = std::chrono::high_resolution_clock::now();
+        for(int i = 0; i < number_of_threads; i++){
+            threads[i] = std::thread(&quad_tree::calculate_force_iter, &QT, objects_vector.begin() + i * number_of_objects_per_thread, objects_vector.begin() + (i+1) * number_of_objects_per_thread);
         }
-        auto stop = std::chrono::high_resolution_clock::now();
-
         memset(GLbuffer + number_of_objects * 2, 0, number_of_boxes * 8 * sizeof(float));
-        QT.setBoxes(GLbuffer + number_of_objects * 2);
-        QT.update_tree(objects_vector.begin(),objects_vector.end());
-
-        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
-        std::cout << 1/(duration.count()/1000000.0) << " FPS " <<  std::endl;
-        for (int i = 0; i < number_of_objects;i++){
-            GLbuffer[i * 2] = objects_vector[i].x;
-            GLbuffer[i * 2 + 1] = objects_vector[i].y;
+        for(int i = 0; i < number_of_threads; i++){
+            threads[i].join();
         }
+        auto stop1 = std::chrono::high_resolution_clock::now();
+        auto start2 = std::chrono::high_resolution_clock::now();
+        QT.update_tree(objects_vector.begin(),objects_vector.end());
+        auto stop2 = std::chrono::high_resolution_clock::now();
+        //QT.print_tree();
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(stop2 - start2);
+        auto durationForceCalc = std::chrono::duration_cast<std::chrono::microseconds>(stop1 - start1);
+        std::cout << 1/((duration.count() + durationForceCalc.count())/1000000.0) << " FPS " << durationForceCalc.count() << " " <<  duration.count() <<  std::endl;
 
         /* Swap front and back buffers */
         glfwSwapBuffers(window);
 
         /* Poll for and process events */
         glfwPollEvents();
+
+        cum_time[0] += duration.count();
+        cum_time[1] += durationForceCalc.count();
+        iter++;
+
     }
+    std::cout << "Average times: " << cum_time[0]/number_of_iter <<" " << cum_time[1]/number_of_iter <<" "<< (cum_time[0]+cum_time[1])/number_of_iter<< std::endl;
+
     glDeleteVertexArrays(1, &VAO);
     glDeleteBuffers(1, &VBO);
     glDeleteProgram(shaderPoint);

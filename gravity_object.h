@@ -9,7 +9,7 @@
 class gravity_object {
 public:
     gravity_object();
-    gravity_object(double mass, double x, double y, double vx, double vy);
+    gravity_object(double mass, double x, double y, double vx, double vy,int index);
     double mass;
     double x;
     double y;
@@ -17,6 +17,7 @@ public:
     double vy;
     double Fx;
     double Fy;
+    int index;
 };
 
 
