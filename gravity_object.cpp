@@ -10,6 +10,8 @@ gravity_object::gravity_object(double mass, double x, double y, double vx, doubl
     this->y = y;
     this->vx = vx;
     this->vy = vy;
+    this->Fx = 0;
+    this->Fy = 0;
 }
 
 gravity_object::gravity_object() : mass(1){

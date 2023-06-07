@@ -8,19 +8,17 @@
 
 class engine {
 private:
-    void calc_forces(gravity_object* object1, gravity_object* object2);
-    const static unsigned int n_objects = 2500;
+    const static unsigned int n_objects = 5;
     gravity_object objects[n_objects];
-
+    constexpr static const double softening_parameter = 0.001;
     constexpr static const double G = 6.67408e-11;
     constexpr static const double update_time = 1;
+    float max_cords [4] = {-1, 1, -1, 1}; // x_min, x_max, y_min, y_max
+    bool normalize = false;
 public:
     engine();
-//    engine(unsigned int n_objects);
-//    engine(gravity_object objects[]);
-    void update();
     float positions [n_objects*2];
-    const unsigned int get_n_objects() {return n_objects;}
+    void normalize_positions();
 
 };
 
