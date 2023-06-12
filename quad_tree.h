@@ -27,20 +27,20 @@ private:
     std::vector<float> boxes;
     int build_tree(box bound_box, std::vector<gravity_object>::iterator begin, std::vector<gravity_object>::iterator end,int recursion_level);
     void calculate_force_recursive(gravity_object *object, int node);
-    const float theta = 0.5; //test
-    const float G = 6.67408e-11;
-    const float softening_parameter = 0.01;
+    static constexpr float theta = 0.5;
+    static constexpr float G = 6.67408e-11;
+    static constexpr float softening_parameter = 0.01;
     float* GLboxes;
     float* GLpoints;
     float update_time = 1;
-
     std::counting_semaphore<1> semaphore[4] = {std::counting_semaphore<1>(1),std::counting_semaphore<1>(1),std::counting_semaphore<1>(1),std::counting_semaphore<1>(1)};
+
 public:
+    quad_tree() = default;
     quad_tree(std::vector<gravity_object>::iterator begin, std::vector<gravity_object>::iterator end,float* boxes,float* points);
+    void create(std::vector<gravity_object>::iterator begin, std::vector<gravity_object>::iterator end,float* boxes,float* points);
     void calculate_force(gravity_object *object);
     void calculate_force_iter(std::vector<gravity_object>::iterator begin, std::vector<gravity_object>::iterator end);
-
-    void print_tree();
     void update_tree(std::vector<gravity_object>::iterator begin, std::vector<gravity_object>::iterator end);
 
     std::vector<float>centers;
@@ -49,6 +49,8 @@ public:
     void setBoxes(float* boxes) {
         GLboxes = boxes;
     }
+    //copy constructor
+
 };
 
 

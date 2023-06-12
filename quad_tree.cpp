@@ -147,12 +147,6 @@ int quad_tree::build_tree(box const bound_box, std::vector<gravity_object>::iter
     return result;
 
 }
-void quad_tree::print_tree(){
-    for (int i = 0; i < nodes.size(); ++i) {
-        std::cout << "Node " << i << " has children: " << nodes[i].children[0][0] << " " << nodes[i].children[0][1] << " " << nodes[i].children[1][0] << " " << nodes[i].children[1][1]
-                  << "|" << mass[i] << "|" << center_of_mass[i] << std::endl;
-    }
-}
 
 void quad_tree::calculate_force(gravity_object *object) {
     object->Fx = 0;
@@ -216,4 +210,11 @@ void quad_tree::fill_centers(int node) {
             fill_centers(nodes[node].children[i][j]);
         }
     }
+}
+void quad_tree::create(std::vector<gravity_object>::iterator begin, std::vector<gravity_object>::iterator end,float* boxes, float* points) {
+    GLboxes = boxes;
+    GLpoints = points;
+    root = build_tree(bbox(begin,end),begin, end, 0);
+    for (auto i = 0; i < nodes.size(); i++)
+        std::cout << i << " " << center_of_mass[i].x << " " << center_of_mass[i].y << " " << mass[i] << " " << width[i] << std::endl;
 }
